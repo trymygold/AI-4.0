@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v5.2 (Fix: Carousel & Hosting) */
+/* script.js - Jewels-Ai Atelier: v6.0 (Production Build - All Fixes) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -34,10 +34,10 @@ let isProcessingHand = false, isProcessingFace = false;
 /* Tracking Variables */
 let currentAssetName = "Select a Design"; 
 let currentAssetIndex = 0; 
+let currentCameraMode = 'user'; 
 
 /* Physics State */
 let physics = { earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0 };
-let currentCameraMode = 'user'; 
 
 /* Auto Try State */
 let autoTryRunning = false;
@@ -46,7 +46,7 @@ let autoTryIndex = 0;
 let autoTryTimeout = null;
 let currentPreviewData = { url: null, name: 'Jewels-Ai_look.png' }; 
 
-/* Stabilizer Variables */
+/* Stabilizer & Gesture Variables */
 const SMOOTH_FACTOR = 0.8; 
 let handSmoother = {
     active: false,
@@ -54,34 +54,29 @@ let handSmoother = {
     bangle: { x: 0, y: 0, angle: 0, size: 0 }
 };
 
-/* --- CO-SHOPPING (MULTIPLAYER) ENGINE --- */
+// GESTURE TRACKING
+let lastGestureTime = 0;
+const GESTURE_COOLDOWN = 1000; // 1 second between swipes
+let previousHandX = null;
+
+/* --- CO-SHOPPING ENGINE --- */
 const coShop = {
-    peer: null,
-    conn: null,
-    myId: null,
-    active: false,
-    isHost: false, 
+    peer: null, conn: null, myId: null, active: false, isHost: false, 
 
     init: function() {
-        this.peer = new Peer(null, { debug: 2 });
-        
+        this.peer = new Peer(null, { debug: 1 });
         this.peer.on('open', (id) => {
             this.myId = id;
             console.log("My Peer ID: " + id);
             this.checkForInvite();
         });
-
         this.peer.on('connection', (c) => {
             this.handleConnection(c);
             showToast("Friend Connected!");
             this.activateUI();
-            if (this.isHost) {
-                setTimeout(() => this.callGuest(c.peer), 1000); 
-            }
+            if (this.isHost) setTimeout(() => this.callGuest(c.peer), 1000); 
         });
-
         this.peer.on('call', (call) => {
-            console.log("Receiving call...");
             call.answer(); 
             call.on('stream', (remoteStream) => {
                 remoteVideo.srcObject = remoteStream;
@@ -91,69 +86,59 @@ const coShop = {
                 showToast("Watching Host Live");
             });
         });
-
         this.peer.on('error', (err) => console.error(err));
     },
 
     checkForInvite: function() {
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
-        if (roomId) {
+        if (roomId) { 
             this.isHost = false; 
-            this.connectToHost(roomId);
-        } else {
-            this.isHost = true;
+            this.connectToHost(roomId); 
+        } else { 
+            this.isHost = true; 
             document.body.classList.add('hosting'); 
         }
     },
 
     connectToHost: function(hostId) {
         this.conn = this.peer.connect(hostId);
-        this.conn.on('open', () => {
-            showToast("Connected! Waiting for video...");
-            this.activateUI();
-        });
+        this.conn.on('open', () => { showToast("Connected! Waiting for video..."); this.activateUI(); });
         this.setupDataListener();
     },
 
-    handleConnection: function(c) {
-        this.conn = c;
-        this.setupDataListener();
-    },
-
-    callGuest: function(guestId) {
-        const stream = canvasElement.captureStream(30);
-        const call = this.peer.call(guestId, stream);
-    },
-
-    setupDataListener: function() {
-        this.conn.on('data', (data) => {
-            if (data.type === 'VOTE') { showReaction(data.val); }
-        });
-    },
-
-    sendUpdate: function(category, index) {
-        if (this.conn && this.conn.open) {
-            this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index });
-        }
-    },
-
-    sendVote: function(val) {
-        if (this.conn && this.conn.open) {
-            this.conn.send({ type: 'VOTE', val: val });
-            showReaction(val); 
-        }
+    handleConnection: function(c) { this.conn = c; this.setupDataListener(); },
+    
+    // Stream AR Canvas to Guest
+    callGuest: function(guestId) { 
+        const stream = canvasElement.captureStream(30); 
+        this.peer.call(guestId, stream); 
     },
     
-    activateUI: function() {
-        this.active = true;
-        document.getElementById('voting-ui').style.display = 'flex';
-        document.getElementById('coshop-btn').style.color = '#00ff00';
-    }
+    setupDataListener: function() { this.conn.on('data', (data) => { if (data.type === 'VOTE') showReaction(data.val); }); },
+    
+    sendUpdate: function(category, index) { if (this.conn && this.conn.open) this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index }); },
+    
+    sendVote: function(val) { if (this.conn && this.conn.open) { this.conn.send({ type: 'VOTE', val: val }); showReaction(val); } },
+    
+    activateUI: function() { this.active = true; document.getElementById('voting-ui').style.display = 'flex'; document.getElementById('coshop-btn').style.color = '#00ff00'; }
 };
 
-/* --- HELPER: LERP --- */
+/* --- HELPER: LERP & NAVIGATION --- */
 function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
+
+// Change Item via Gesture or Click
+function changeItem(direction) {
+    const assets = JEWELRY_ASSETS[currentType];
+    if (!assets || assets.length === 0) return;
+    
+    let newIndex = currentAssetIndex + direction;
+    if (newIndex < 0) newIndex = assets.length - 1;
+    if (newIndex >= assets.length) newIndex = 0;
+    
+    applyAssetInstantly(assets[newIndex], newIndex, true);
+    showToast(direction > 0 ? "Next Design" : "Previous Design");
+}
 
 /* --- DAILY DROP --- */
 function checkDailyDrop() {
@@ -186,7 +171,7 @@ function updatePhysics(headTilt, headX, width) {
     if (physics.swayOffset < -0.5) physics.swayOffset = -0.5;
 }
 
-/* --- BACKGROUND FETCHING (FIXED URL LOGIC) --- */
+/* --- ASSET MANAGEMENT --- */
 function initBackgroundFetch() { Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); }); }
 function fetchCategoryData(category) {
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
@@ -202,12 +187,10 @@ function fetchCategoryData(category) {
             JEWELRY_ASSETS[category] = data.files.map(file => {
                 const baseLink = file.thumbnailLink;
                 let thumbSrc, fullSrc;
-                // FIX: Better fallback logic ensures images always load
                 if (baseLink) {
                     thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
                     fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
                 } else {
-                    // Fallback to direct ID links if thumbnailLink is missing
                     thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
                     fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
                 }
@@ -222,7 +205,6 @@ function fetchCategoryData(category) {
     return fetchPromise;
 }
 
-/* --- ASSET LOADING --- */
 function loadAsset(src, id) {
     return new Promise((resolve) => {
         if (!src) { resolve(null); return; }
@@ -240,7 +222,7 @@ function setActiveARImage(img) {
     else if (currentType === 'bangles') bangleImg = img;
 }
 
-/* --- INITIALIZATION --- */
+/* --- INIT & SELECTION --- */
 window.onload = async () => {
     initBackgroundFetch();
     coShop.init(); 
@@ -249,7 +231,6 @@ window.onload = async () => {
     await selectJewelryType('earrings');
 };
 
-/* --- SELECTION LOGIC (FIX: RESTORE VISIBILITY) --- */
 async function selectJewelryType(type) {
   if (currentType === type) return;
   currentType = type;
@@ -264,7 +245,7 @@ async function selectJewelryType(type) {
   if (!assets) assets = await fetchCategoryData(type);
   if (!assets || assets.length === 0) return;
 
-  // FIX: Make the carousel visible!
+  // FIX: Ensure carousel is visible
   container.style.display = 'flex';
 
   const fragment = document.createDocumentFragment();
@@ -296,24 +277,52 @@ function highlightButtonByIndex(index) {
     }
 }
 
-/* --- CAMERA & RENDER LOOPS --- */
+/* --- CAMERA & LOOP --- */
 async function startCameraFast(mode = 'user') {
-    if (!coShop.isHost && coShop.active) return; // Guest doesn't need cam
+    // Guest Safety
+    if (!coShop.isHost && coShop.active) return;
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
+    
     currentCameraMode = mode;
     if (videoElement.srcObject) { videoElement.srcObject.getTracks().forEach(track => track.stop()); }
+    
     if (mode === 'environment') { videoElement.classList.add('no-mirror'); } else { videoElement.classList.remove('no-mirror'); }
+    
+    const constraints = { 
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode },
+        audio: false 
+    };
+
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode } });
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         videoElement.srcObject = stream;
         videoElement.onloadeddata = () => { videoElement.play(); detectLoop(); };
-    } catch (err) { console.error("Camera Error", err); }
+    } catch (err) { 
+        console.error("Camera Error:", err); 
+        alert("Camera access denied or unavailable. Please use HTTPS.");
+    }
 }
 
 async function detectLoop() {
-    if (videoElement.readyState >= 2 && !remoteVideo.srcObject) { 
-        if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
-        if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
+    // If watching remote stream, pause local detection
+    if (remoteVideo.style.display === 'block') return;
+
+    if (videoElement.readyState >= 2) {
+        const w = videoElement.videoWidth; const h = videoElement.videoHeight;
+        canvasElement.width = w; canvasElement.height = h;
+
+        // DRAW VIDEO TO CANVAS (Required for Streaming & Anti-Black Screen)
+        canvasCtx.save();
+        if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
+        else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
+        canvasCtx.drawImage(videoElement, 0, 0, w, h);
+        canvasCtx.restore();
+
+        // Run AI
+        try {
+            if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
+            if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
+        } catch(e) { console.warn(e); }
     }
     requestAnimationFrame(detectLoop);
 }
@@ -324,11 +333,12 @@ faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTra
 faceMesh.onResults((results) => {
   if (currentType !== 'earrings' && currentType !== 'chains') return;
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
-  canvasElement.width = w; canvasElement.height = h;
+  
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-  canvasCtx.drawImage(videoElement, 0, 0, w, h);
+  
+  // Note: Video is already drawn in detectLoop, we just draw AR on top here
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
     const lm = results.multiFaceLandmarks[0]; 
     const leftEar = { x: lm[132].x * w, y: lm[132].y * h }; const rightEar = { x: lm[361].x * w, y: lm[361].y * h };
@@ -355,26 +365,43 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- MEDIAPIPE HANDS --- */
+/* --- MEDIAPIPE HANDS & GESTURES --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
+
 hands.onResults((results) => {
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   if (currentType !== 'rings' && currentType !== 'bangles') return;
-  canvasElement.width = w; canvasElement.height = h;
+  
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-  canvasCtx.drawImage(videoElement, 0, 0, w, h);
+
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
+      
+      // --- SWIPE GESTURE LOGIC ---
+      const handX = lm[9].x; 
+      if (previousHandX !== null) {
+          const delta = handX - previousHandX;
+          const now = Date.now();
+          if (Math.abs(delta) > 0.2 && now - lastGestureTime > GESTURE_COOLDOWN) {
+              if (delta > 0) changeItem(-1); // Swipe Right -> Prev
+              else changeItem(1); // Swipe Left -> Next
+              lastGestureTime = now;
+          }
+      }
+      previousHandX = handX;
+      // ---------------------------
+
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; const pip = { x: lm[14].x * w, y: lm[14].y * h };
       const targetRingAngle = calculateAngle(mcp, pip) - (Math.PI / 2);
       const targetRingWidth = Math.hypot(pip.x - mcp.x, pip.y - mcp.y) * 0.6; 
       const wrist = { x: lm[0].x * w, y: lm[0].y * h }; 
       const targetArmAngle = calculateAngle(wrist, { x: lm[9].x * w, y: lm[9].y * h }) - (Math.PI / 2);
       const targetBangleWidth = Math.hypot((lm[17].x*w)-(lm[5].x*w), (lm[17].y*h)-(lm[5].y*h)) * 1.25; 
+      
       if (!handSmoother.active) {
           handSmoother.ring = { x: mcp.x, y: mcp.y, angle: targetRingAngle, size: targetRingWidth };
           handSmoother.bangle = { x: wrist.x, y: wrist.y, angle: targetArmAngle, size: targetBangleWidth };
@@ -399,11 +426,13 @@ hands.onResults((results) => {
           canvasCtx.save(); canvasCtx.translate(handSmoother.bangle.x, handSmoother.bangle.y); canvasCtx.rotate(handSmoother.bangle.angle);
           canvasCtx.drawImage(bangleImg, -handSmoother.bangle.size/2, -bHeight/2, handSmoother.bangle.size, bHeight); canvasCtx.restore();
       }
+  } else {
+      previousHandX = null;
   }
   canvasCtx.restore();
 });
 
-/* --- UTILS --- */
+/* --- UI HANDLERS --- */
 window.selectJewelryType = selectJewelryType; 
 window.toggleTryAll = toggleTryAll; 
 window.tryDailyItem = tryDailyItem; 
@@ -443,4 +472,5 @@ function showGallery() { const grid = document.getElementById('gallery-grid'); g
 function closePreview() { document.getElementById('preview-modal').style.display = 'none'; }
 function closeGallery() { document.getElementById('gallery-modal').style.display = 'none'; }
 function closeLightbox() { document.getElementById('lightbox-overlay').style.display = 'none'; }
+function showToast(message) { var x = document.getElementById("toast-notification"); x.innerText = message; x.className = "show"; setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000); }
 function showReaction(type) { const container = document.getElementById('reaction-container'); const el = document.createElement('div'); el.innerText = type === 'love' ? '❤️' : '👎'; el.className = 'floating-reaction'; el.style.left = Math.random() * 80 + 10 + '%'; container.appendChild(el); setTimeout(() => el.remove(), 2000); }
