@@ -1,4 +1,4 @@
-/* style.css - Jewels-Ai Atelier: v5.0 (Co-Shopping Enabled) */
+/* style.css - Jewels-Ai Atelier: v5.3 (Fixed Zoom/AspectRatio) */
 
 /* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Montserrat:wght@400;600&display=swap');
@@ -34,10 +34,40 @@ body {
 
 @keyframes flash-animation { 0% { opacity: 0.8; } 100% { opacity: 0; } }
 
-#video-container { position: fixed; inset: 0; z-index: 0; background: black; }
-#webcam { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-#overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: 1; pointer-events: none; }
+#video-container { 
+    position: fixed; inset: 0; z-index: 0; background: black; 
+    display: flex; align-items: center; justify-content: center;
+}
+
+/* FIX: Use 'contain' to show full camera frame without zooming/cropping */
+#webcam, #overlay, #remote-video { 
+    position: absolute; 
+    width: 100%; 
+    height: 100%; 
+    object-fit: contain; /* THIS FIXES THE ZOOM ISSUE */
+    max-width: 100%; 
+    max-height: 100%;
+}
+
+/* Mirror the local webcam (unless environment mode) */
+#webcam { transform: scaleX(-1); }
 #webcam.no-mirror { transform: none !important; }
+
+/* The Overlay Canvas sits on top of webcam */
+#overlay { z-index: 1; pointer-events: none; }
+
+/* Remote Video (The Guest View) */
+#remote-video {
+    z-index: 5; 
+    background: #000;
+    display: none; /* Hidden unless receiving stream */
+    transform: scaleX(1); /* Remote stream is usually not mirrored */
+}
+
+/* When acting as Host, hide the raw webcam (since we draw to canvas) */
+body.hosting #webcam { opacity: 0; }
+/* The canvas background needs to be transparent to show video if we weren't drawing it manually, 
+   but since script.js draws video+AR, we keep it visible. */
 
 #loading-status {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -98,9 +128,9 @@ body {
 
 .thumb-btn:active { transform: scale(0.95); border-color: var(--accent); }
 
-/* --- 5. VOTING UI (NEW) --- */
+/* --- 5. VOTING UI --- */
 .voting-panel {
-    position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%);
+    position: fixed; bottom: 160px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 20px; z-index: 20;
 }
 
@@ -182,7 +212,7 @@ body {
 .close-preview, .close-gallery, .close-lightbox { position: absolute; top: 15px; right: 20px; font-size: 30px; color: #888; cursor: pointer; z-index: 2001; }
 .close-preview:hover, .close-gallery:hover, .close-lightbox:hover { color: var(--accent); }
 
-/* --- 7. PROCESSING SPINNER --- */
+/* --- 7. PROCESSING SPINNER & MODALS --- */
 #process-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 4000;
     display: none; align-items: center; justify-content: center;
@@ -196,15 +226,19 @@ body {
 
 @keyframes spin { 100% { transform: rotate(360deg); } }
 
-/* --- 8. REMOTE STREAM (CO-SHOPPING) --- */
-#remote-video {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; z-index: 5; background: #000;
-    display: none; /* Hidden unless receiving stream */
-    transform: scaleX(1); /* Usually remote stream is not mirrored */
+/* Daily Drop Modal Specifics */
+.modal-box {
+    background: #1a1a1a; padding: 30px; border-radius: 15px; 
+    border: 1px solid #d4af37; text-align: center; width: 350px; max-width: 85%;
+    box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
 }
 
-/* When acting as Host, we hide the raw webcam to avoid 'ghosting' 
-   since we are drawing the video directly onto the canvas now. */
-body.hosting #webcam { opacity: 0; }
-body.hosting #overlay { background: #000; }
+#toast-notification {
+    visibility: hidden; min-width: 250px; background-color: #333; color: #d4af37;
+    text-align: center; border-radius: 4px; padding: 16px; position: fixed;
+    z-index: 9999; left: 50%; bottom: 30px; transform: translateX(-50%);
+    font-size: 17px; font-family: 'Montserrat', sans-serif; border: 1px solid #d4af37;
+}
+#toast-notification.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+@keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+@keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
